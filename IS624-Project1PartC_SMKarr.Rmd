@@ -1,0 +1,134 @@
+---
+title: "Time-base Sequence - Project 1 Part C"
+---
+
+```{r, load-packages, eval=TRUE, include=FALSE}
+library(fpp2)
+library(lubridate)
+library(tidyverse)
+library(dplyr)
+```
+
+Part C consists of two data sets.  
+
+There are simple 2 columns sets, however they have different time stamps.  Your optional assignment is to time-base sequence the data and aggregate based on hour (example of what this looks like, follows).  Note for multiple recordings within an hour, take the mean.  Then to test appropriate assumptions and forecast a week forward with confidence bands (80 and 95%). Add these to your existing files above – clearly labeled.  
+
+#### Merge, Join and clean data into a single hourly timeseries with weighted avg waterflows
+```{r, eval_data, eval=TRUE, include=TRUE}
+# Read CSV into R
+path<-paste0(getwd(),'/')
+file1<-'Waterflow_Pipe1.csv'
+file2<-'Waterflow_Pipe2.csv'
+data1 <- read.csv(paste0(path,file1), header=TRUE, sep=",")
+data2 <- read.csv(paste0(path,file2), header=TRUE, sep=",")
+
+# Convert to dataframe
+df_wf1<-as.data.frame(data1)
+df_wf1<-df_wf1 %>% 
+  select(DateTime,WaterFlow) %>% 
+  mutate(DateTimeHrly = as.POSIXct(df_wf1$DateTime,format="%Y-%m-%d %H")) 
+
+df_wf1<-df_wf1 %>% 
+  select(DateTimeHrly,WaterFlow) %>% 
+  group_by(DateTimeHrly) %>% 
+  summarise(
+    AvgWaterFlow = mean(WaterFlow, na.rm = TRUE),
+    n = n())
+
+df_wf2<-as.data.frame(data2)
+df_wf2<-df_wf2 %>% 
+  select(DateTime,WaterFlow) %>% 
+  mutate(DateTimeHrly = as.POSIXct(df_wf2$DateTime,format="%Y-%m-%d %H"))
+
+df_wf2<-df_wf2 %>% 
+  select(DateTimeHrly,WaterFlow) %>% 
+  group_by(DateTimeHrly) %>% 
+  summarise(
+    AvgWaterFlow = mean(WaterFlow, na.rm = TRUE),
+    n = n())
+
+
+mymergedata <- merge(x = df_wf2, y = df_wf1, by = "DateTimeHrly", all = TRUE)
+mymergedata[is.na(mymergedata )]<- 0
+
+
+df_merged_wf<-
+  mymergedata %>% 
+  select(AvgWaterFlow.x,n.x,AvgWaterFlow.y,n.y) %>% 
+  mutate(DateTime = mymergedata$DateTimeHrly,
+         WAvgWaterFlow = ((AvgWaterFlow.x * n.x + AvgWaterFlow.y * n.y)/(n.x + n.y)),
+         n=(n.x + n.y)
+  ) 
+
+df_merged_wf<-
+  df_merged_wf %>% 
+    select(DateTime,WAvgWaterFlow,n)
+
+head(df_merged_wf,n=20)
+```
+
+Consider the **df_merged_wf** series — the merged hourly waterflows dataset.
+The df_merged_wf ts contains 1000 records sampling hourly waterflows from a pipe.
+
+Use the **ses()** function in R to find the optimal values of ${\alpha}$ and ${\ell}_{0}$, and generate forecasts for the next four months.  Note this is hourly data and shouldn't be overfit.  We are using
+a simple exponential smoothing model that weights the more recent data more heavily.  
+
+Compute a 80% & 95% prediction interval for the first forecast using $\hat{y} {\pm} 1.96s$
+is the standard deviation of the residuals. Compare your interval with the interval produced by R.
+
+```{r, predict_data, eval=TRUE, include=TRUE}
+# Get timeseries
+df_merged_wf_ts<-ts(df_merged_wf[2])
+# Get 1 week forecasted estimate parameters from model
+round(ses(df_merged_wf_ts, h=24*7)$model$par[1:2],4)
+# Forecast out 1 week for visibility on graph
+fc_df_merged_wf_ses<-ses(df_merged_wf_ts, h=24*7)
+# Accuracy of one-step-ahead training errors
+round(accuracy(fc_df_merged_wf_ses),2)
+# see how SES model was fitted
+fc_df_merged_wf_ses$model
+# get 1 week of forecasts
+#tsCV(df_merged_wf_ts,ses,h=24*7)[1:4,]
+# 95% prediction interval for the first forecast
+fc_df_merged_wf_ses$upper[1, "95%"]
+fc_df_merged_wf_ses$lower[1, "95%"]
+# 80% prediction interval for the first forecast
+fc_df_merged_wf_ses$upper[1, "80%"]
+fc_df_merged_wf_ses$lower[1, "80%"]
+# calculate standard deviation with and without model
+s <- sd(fc_df_merged_wf_ses$residuals)
+s
+# s = 10273.69 vs s (estimated) 10308.58
+# calculate 95% prediction interval with and without model
+fc_df_merged_wf_ses$mean[1] + 1.96*s
+fc_df_merged_wf_ses$mean[1] - 1.96*s
+mean(df_merged_wf_ts) + 1.96*s
+mean(df_merged_wf_ts)  - 1.96*s
+# calculate 80% prediction interval with and without model
+fc_df_merged_wf_ses$mean[1] + 1.28*s
+fc_df_merged_wf_ses$mean[1] - 1.28*s
+mean(df_merged_wf_ts) + 1.28*s
+mean(df_merged_wf_ts)  - 1.28*s
+```
+
+
+```{r, plot_forecasted_data, eval=TRUE, include=TRUE}
+# Note that forecast using ses doesn't have a trend component.
+fc_df_merged_wf_ses<-ses(df_merged_wf_ts, h=24*7)
+autoplot(fc_df_merged_wf_ses) + 
+    autolayer(fitted(fc_df_merged_wf_ses), series="fitted") +
+    ylab("Predicted Water flow rate (base on weighted avg) ") + xlab("hourly")
+df_predicted_wf<-as.data.frame(fc_df_merged_wf_ses)
+df_predicted_wf<-df_predicted_wf %>% 
+  mutate(WAvgWaterFlow =`Point Forecast`,
+         DateTime=as.POSIXct("2015-12-03 16:00:00",format="%Y-%m-%d %H:%M:%OS") + 3600 * row_number(),
+         n=1)
+
+df_predicted_wf<-
+  df_predicted_wf %>% 
+    select(DateTime,WAvgWaterFlow,n)
+
+# write combined output of 1000 training recs plus 168 predictions (1 week)
+df_wf_combined<-rbind(df_merged_wf, df_predicted_wf)
+write.csv(df_wf_combined, file = "df_wf_combined.csv")
+```
